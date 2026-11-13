@@ -118,8 +118,28 @@ def test_normalize_shape_scales_to_one_and_centres_route_length():
 
 def test_text_shape_renders_letters():
     paths, closed = text_shapes.text_to_shape("AB")
-    assert closed is False
-    assert len(paths) >= 3  # A has 2 strokes, B has 3 -> >=5 actually, but >=3 is safe
+    assert closed is True
+    assert len(paths) == 1
+    loop = paths[0]
+    assert loop[0] == loop[-1]
+    assert max(x for x, _ in loop) > text_shapes.GLYPH_W + 1.5  # B is drawn after A
+
+
+def test_text_loop_returns_to_start_along_an_underline():
+    loop = text_shapes.close_with_underline([(0.0, 10.0), (0.0, 0.0), (6.0, 0.0)])
+
+    assert loop[:3] == [(0.0, 10.0), (0.0, 0.0), (6.0, 0.0)]
+    assert loop[-1] == (0.0, 10.0)
+    baseline = -text_shapes.UNDERLINE_GAP
+    return_leg = loop[3:]
+    assert min(y for _, y in return_leg) == pytest.approx(baseline)
+    assert (6.0, baseline) in return_leg and (0.0, baseline) in return_leg
+    assert all(a != b for a, b in zip(loop, loop[1:], strict=False))
+
+
+def test_text_loop_rejects_a_single_point():
+    with pytest.raises(ValueError, match="at least two points"):
+        text_shapes.close_with_underline([(0.0, 0.0)])
 
 
 def test_vector_font_contains_every_letter_and_digit():

@@ -2,8 +2,9 @@
 
 Each glyph is a list of *strokes*; each stroke is a list of ``(x, y)`` points in
 a 6 x 10 local box. :func:`text_to_shape` lays glyphs out left-to-right and
-returns a list of sub-paths (one per stroke), so an intent like ``"draw AKOS
-in Berlin"`` produces drawable letter outlines.
+returns one closed loop: the strokes stitched in drawing order plus an
+underline that leads back to the first point, so an intent like ``"draw AKOS
+in Berlin"`` produces letters a runner can finish where they started.
 
 Curved strokes (5+ points) are Catmull-Rom smoothed at output so letters like
 O, C, S read smoothly on the map instead of looking polygonal. Straight strokes
@@ -12,7 +13,7 @@ are densified so ORS has enough waypoints to follow the intended roads.
 
 from __future__ import annotations
 
-from .geo import Path, catmull_rom_smooth, densify_path
+from .geo import Path, catmull_rom_smooth, densify_path, stitch_paths
 
 Glyph = list[list[tuple[float, float]]]  # list of strokes
 
@@ -21,6 +22,7 @@ GLYPH_H = 10.0
 
 _DENSIFY_STEP = 0.5  # local-box units; ~1 point per 0.5 units of stroke length
 _CURVE_THRESHOLD = 5  # strokes with >= this many points are treated as curves
+UNDERLINE_GAP = 2.5  # local-box units between the lowest stroke and the return leg
 
 FONT: dict[str, Glyph] = {
     "A": [[(0, 0), (3, 10), (6, 0)], [(1.2, 4), (4.8, 4)]],
@@ -81,12 +83,22 @@ def _refine_stroke(stroke: list[tuple[float, float]]) -> list[tuple[float, float
 def text_to_shape(
     text: str, *, spacing: float = 1.5, line_height: float = 12.0, max_cols: int = 12
 ) -> tuple[list[Path], bool]:
-    """Render ``text`` into a list of sub-paths in unit space (un-normalised).
+    """Render ``text`` into one closed loop in unit space (un-normalised).
 
-    Long text wraps at ``max_cols`` characters per line. Returns ``(paths,
-    closed=False)``. Curved strokes are spline-smoothed; straight strokes are
-    densified so the road-snapper has enough waypoints to follow.
+    Long text wraps at ``max_cols`` characters per line. Returns ``([loop],
+    True)``: the letter strokes stitched into one continuous line, closed by an
+    underline that returns to the start (see :func:`close_with_underline`).
+    Curved strokes are spline-smoothed; straight strokes are densified so the
+    road-snapper has enough waypoints to follow.
     """
+    strokes = _layout_strokes(text, spacing=spacing, line_height=line_height, max_cols=max_cols)
+    return [close_with_underline(stitch_paths(strokes))], True
+
+
+def _layout_strokes(
+    text: str, *, spacing: float, line_height: float, max_cols: int
+) -> list[Path]:
+    """Lay glyph strokes out left-to-right, wrapping at ``max_cols``."""
     paths: list[Path] = []
     cursor_x = 0.0
     cursor_y = 0.0
@@ -109,4 +121,23 @@ def text_to_shape(
 
     if not paths:
         paths = [[(0.0, 0.0), (1.0, 0.0)]]
-    return paths, False
+    return paths
+
+
+def close_with_underline(route: Path) -> Path:
+    """Return ``route`` closed by an underline leading back to its first point.
+
+    A run or ride should end where it began, but written text naturally ends
+    on the last letter. The return leg drops below the lowest stroke, runs
+    back underneath the text and climbs to the start, so it reads as an
+    underline instead of a stroke cutting through the letters.
+    """
+    if len(route) < 2:
+        raise ValueError("a text route needs at least two points to close")
+    start, end = route[0], route[-1]
+    baseline = min(y for _, y in route) - UNDERLINE_GAP
+    leg = [end]
+    for corner in ((end[0], baseline), (start[0], baseline), start):
+        if corner != leg[-1]:
+            leg.append(corner)
+    return list(route) + densify_path(leg, max_step=_DENSIFY_STEP)[1:]
