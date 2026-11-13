@@ -114,6 +114,24 @@ def test_intent_fallback_distinguishes_a_shape_from_written_text():
     assert object_word_as_text.text == "BUG"
 
 
+@pytest.mark.parametrize(
+    ("prompt", "text", "sport"),
+    [
+        ("write GPS while cycling in Budapest, about 25 km", "GPS", "bike"),
+        ("write LOVE while running in Poznań, about 12 km", "LOVE", "run"),
+    ],
+)
+def test_intent_fallback_excludes_the_activity_clause_from_written_text(
+    prompt: str, text: str, sport: str
+) -> None:
+    agent = IntentAgent()
+    intent = agent._parse(agent._fallback(prompt).text)
+
+    assert intent.shape == "text"
+    assert intent.text == text
+    assert intent.sport == sport
+
+
 def test_bug_prompt_is_understood_as_an_insect_template_not_a_letter():
     prompt = "a bug run in Tatabánya, about 8 km"
     agent = IntentAgent()

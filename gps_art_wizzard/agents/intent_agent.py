@@ -242,7 +242,7 @@ class IntentAgent(BaseAgent):
         text_match = re.search(
             r"""\b(?:write|spell)\s+(?:the\s+(?:word|text)\s+)?["']?
                 ([A-Za-z0-9 !?-]{1,20}?)
-                (?=["']?(?:\s+(?:in|near|around|for|about)\b|$)|[,.;])""",
+                (?=["']?(?:\s+(?:in|near|around|for|about|while)\b|$)|[,.;])""",
             text,
             flags=re.IGNORECASE | re.VERBOSE,
         )
