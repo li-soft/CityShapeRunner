@@ -497,7 +497,11 @@ def _interpolate(a: LatLon, b: LatLon, *, step_m: float) -> list[LatLon]:
 
 
 def _subsample(
-    waypoints: list[LatLon], *, closed: bool, max_points: int = _MAX_ORS_COORDINATES
+    waypoints: list[LatLon],
+    *,
+    closed: bool,
+    max_points: int = _MAX_ORS_COORDINATES,
+    corner_limit: int | None = None,
 ) -> list[LatLon]:
     """Build a bounded, curvature-preserving set of ORS guide points.
 
@@ -509,9 +513,13 @@ def _subsample(
     guides are roughly 400 m apart (subject to the caller's visual-guide
     budget and ORS's hard 50-coordinate limit).
 
-    When a drawing contains more protected turns than the budget can hold, a
-    metre-space Douglas-Peucker pass provides the least aggressive fallback.
+    When a drawing contains more protected turns than the budget can hold,
+    ``corner_limit`` lets it keep exactly those authored corners (no filler)
+    as long as they fit that limit; beyond it, a metre-space Douglas-Peucker
+    pass provides the least aggressive fallback.
     """
+    if corner_limit is not None and corner_limit < max_points:
+        raise ValueError("corner_limit must not be below max_points")
     minimum = 3 if closed else 2
     if max_points < minimum:
         raise ValueError(f"max_points must be at least {minimum}")
@@ -569,6 +577,13 @@ def _subsample(
             protected_indices.add(index)
 
     if len(protected_indices) > max_points:
+        if corner_limit is not None and len(protected_indices) <= corner_limit:
+            # Lettering and other corner-heavy drawings lose whole strokes
+            # when corners are simplified away; authored corners are never
+            # the off-grid filler the smaller visual budget guards against.
+            return _prepare_waypoints(
+                [pts[index] for index in sorted(protected_indices)], closed=closed
+            )
         return _simplify_to_budget(
             pts,
             line,
@@ -1406,12 +1421,14 @@ def snap_route_detailed(
 
     # The hosted API permits 50 coordinates, but treating that limit as a
     # target forces the router through unnecessary off-grid points and creates
-    # U-turn scribbles. Preserve authored corners within a smaller visual-guide
-    # budget; validation reports the resulting quality if detail is lost.
+    # U-turn scribbles. Filler guides stay within a smaller visual-guide
+    # budget; authored corners may use the full provider limit so lettering
+    # keeps its strokes. Validation reports the quality if detail is lost.
     via = _subsample(
         prepared,
         closed=closed,
         max_points=budget,
+        corner_limit=_MAX_ORS_COORDINATES,
     )
     radii = [start] + [radius for radius in _RADIUS_RETRIES if radius > start]
 

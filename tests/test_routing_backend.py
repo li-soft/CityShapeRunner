@@ -211,3 +211,31 @@ def test_public_osrm_requests_are_spaced_for_fair_use(monkeypatch) -> None:
     osrm_client._wait_for_fair_use_slot(1.0)
 
     assert sleeps == [pytest.approx(0.75)]
+
+
+def test_osrm_disconnected_snap_retries_without_a_search_radius(osrm_server) -> None:
+    osrm_server.responses.append(
+        httpx.Response(400, json={"code": "NoRoute", "message": "Impossible route between points"})
+    )
+
+    _, _, snapped, _ = ors_client.snap_route_detailed(WAYPOINTS)
+
+    assert snapped is True
+    first, retry = osrm_server.requests
+    assert "radiuses" in first.url.params
+    assert "radiuses" not in retry.url.params
+    assert retry.url.path == first.url.path
+
+
+def test_osrm_unbounded_retry_failure_still_reaches_the_caller(osrm_server) -> None:
+    no_route = {"code": "NoRoute", "message": "Impossible route between points"}
+    osrm_server.responses.extend(httpx.Response(400, json=no_route) for _ in range(2))
+    backend = osrm_client.OsrmDirections(base_url=OSRM_BASE, min_interval_s=0.0)
+
+    with ors_client._routing_client() as client:
+        result = backend.route(list(WAYPOINTS), radius=120, client=client)
+
+    assert result == routing_backend.RouteFailure(
+        400, routing_backend.ERROR_POINTS_NOT_CONNECTED, "Impossible route between points"
+    )
+    assert len(osrm_server.requests) == 2

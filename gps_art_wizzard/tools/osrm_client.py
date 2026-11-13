@@ -168,6 +168,26 @@ class OsrmDirections:
         profile = profile_for(self.sport)
         url = route_url(self.base_url, profile, via)
         params = route_params(via, radius=radius, start_direction_deg=self.start_direction_deg)
+        result = self._request(client, url, params, radius=radius)
+        if isinstance(result, RouteFailure) and result.error_code == ERROR_POINTS_NOT_CONNECTED:
+            # A search radius makes OSRM snap a guide to the nearest segment
+            # even when it is a disconnected fragment (a courtyard path, a
+            # platform). Without the limit OSRM prefers the connected street
+            # network, so one unbounded retry keeps every guide instead of
+            # letting the caller drop guides and flatten the drawing.
+            unbounded = {key: value for key, value in params.items() if key != "radiuses"}
+            result = self._request(client, url, unbounded, radius=None)
+        return result
+
+    def _request(
+        self,
+        client: httpx.Client,
+        url: str,
+        params: dict[str, str],
+        *,
+        radius: int | None,
+    ) -> RoutedPath | RouteFailure:
+        radius_label = f"{radius}m" if radius is not None else "unbounded"
         _wait_for_fair_use_slot(self.min_interval_s)
         record_routing_request("directions")
         try:
@@ -188,9 +208,9 @@ class OsrmDirections:
             if failure.error_code is None:
                 record_routing_failure("directions", f"http_{response.status_code}")
             log.warning(
-                "OSRM returned HTTP %d (radius=%dm): %s",
+                "OSRM returned HTTP %d (radius=%s): %s",
                 response.status_code,
-                radius,
+                radius_label,
                 failure.message[:240],
             )
             return failure

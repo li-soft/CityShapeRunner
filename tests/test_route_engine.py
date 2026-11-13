@@ -4476,3 +4476,34 @@ def test_explicit_model_provider_is_prioritised_without_losing_fallbacks():
 def test_orchestrator_rejects_blank_prompt(prompt):
     with pytest.raises(ValueError, match="empty"):
         Orchestrator(nodes={}).run(prompt)
+
+
+def _zigzag_route(corner_count: int) -> list[tuple[float, float]]:
+    """Open zigzag whose every interior vertex is a sharp authored corner."""
+    return [
+        (47.5 + (0.002 if index % 2 else 0.0), 19.0 + index * 0.002)
+        for index in range(corner_count)
+    ]
+
+
+def test_subsample_keeps_every_authored_corner_within_the_corner_limit():
+    route = _zigzag_route(35)
+
+    simplified = ors_client._subsample(route, closed=False, max_points=24)
+    kept = ors_client._subsample(route, closed=False, max_points=24, corner_limit=50)
+
+    assert len(simplified) <= 24
+    assert kept == route
+
+
+def test_subsample_simplifies_corners_beyond_the_corner_limit():
+    route = _zigzag_route(35)
+
+    sampled = ors_client._subsample(route, closed=False, max_points=24, corner_limit=30)
+
+    assert len(sampled) <= 24
+
+
+def test_subsample_rejects_a_corner_limit_below_the_budget():
+    with pytest.raises(ValueError, match="corner_limit"):
+        ors_client._subsample(_zigzag_route(5), closed=False, max_points=24, corner_limit=10)

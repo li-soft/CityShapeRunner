@@ -27,7 +27,7 @@ explicit review.
 > `pyproject.toml` says `MIT`. Check with the upstream author before you
 > redistribute or deploy this fork.
 
-This fork adds three things to the planner:
+This fork adds four things to the planner:
 
 - **Upload your own SVG shape.** Open *Other ways to start → Use your own SVG
   or an image link*, then drop an `.svg` file or choose one. The server checks
@@ -42,6 +42,10 @@ This fork adds three things to the planner:
 - **Walking** as a third activity next to running and cycling (2–40 km,
   default 5 km). It routes on the pedestrian profile (`foot-walking` on ORS,
   `foot` on OSRM).
+- **Written text returns to the start.** Text such as `write LOVE` is drawn
+  as one loop: after the last letter the route runs back under the text, like
+  an underline, and finishes where it began. Letter corners are all kept as
+  routing guides (up to the provider's 50-coordinate limit).
 - **Keyless street routing.** With no `ORS_API_KEY` and no self-hosted ORS,
   the planner routes through the public FOSSGIS OSRM server
   (`routing.openstreetmap.de`, separate foot and bike graphs). OpenRouteService
@@ -99,7 +103,10 @@ identical requests inside one generation come from the existing directions
 cache. The batched ORS snap preflight is skipped, because it would take one
 OSRM request per point. A keyless generation therefore makes a few dozen
 Directions calls and can take a minute. OSRM returns no surface or steepness
-data, so route-readiness details show as unavailable. Use your own OSRM or ORS
+data, so route-readiness details show as unavailable. When OSRM reports that
+guides cannot be connected (a guide snapped to an isolated path inside the
+search radius), the request is retried once without the radius, so OSRM picks
+the connected street network instead of dropping guides. Use your own OSRM or ORS
 server for heavier use. Tests and `GEOCODE_OFFLINE=1` never contact public
 routers.
 
