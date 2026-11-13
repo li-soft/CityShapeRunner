@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..config import get_settings
 from ..state import SnappedRoute, WorkflowState
 from ..tools import ors_client
+from ..tools.routing_backend import select_routing_backend
 from .base import BaseAgent
 
 
@@ -79,7 +80,7 @@ class SnapAgent(BaseAgent):
             snapped=snapped,
             readiness=readiness,
         )
-        if not snapped and get_settings().routing.ors_api_key:
+        if not snapped and select_routing_backend(get_settings().routing) != "none":
             state.errors.append(
                 "snap: ORS routing failed; route is straight-line, not on roads"
             )

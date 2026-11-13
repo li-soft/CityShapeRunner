@@ -23,6 +23,7 @@ from ..config import get_settings
 from ..state import RoutePreferences, WorkflowState
 from ..workflow_runtime import active_workflow_runtime, check_cancellation, record_routing_request
 from . import geo, osm_data
+from .routing_backend import select_routing_backend
 
 
 @dataclass(frozen=True)
@@ -259,7 +260,8 @@ def graph_for_state(state: WorkflowState) -> StreetGraph | None:
     if not cfg.shape_graph_enabled or state.route_draft is None or state.intent is None:
         return None
     snapshot = cfg.shape_graph_snapshot
-    if not snapshot and (osm_data.offline_mode() or not cfg.ors_api_key):
+    # Graph proposals only help when a street router can validate them.
+    if not snapshot and (osm_data.offline_mode() or select_routing_backend(cfg) == "none"):
         return None
     draft = state.route_draft
     # A frozen city graph can be supplied for reproducible runs. Online areas

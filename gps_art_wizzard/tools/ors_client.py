@@ -29,7 +29,14 @@ from ..workflow_runtime import (
     record_routing_failure,
     record_routing_request,
 )
-from . import geo, shape_similarity
+from . import geo, osrm_client, shape_similarity
+from .routing_backend import (
+    DirectionsBackend,
+    RoutedPath,
+    RouteFailure,
+    is_public_ors,
+    select_routing_backend,
+)
 
 log = logging.getLogger(__name__)
 
@@ -49,11 +56,6 @@ _GUIDANCE_SPACING_M = 400.0
 _CORNER_TURN_DEG = 14.0
 _HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
 _CONNECTIVITY_ERROR_CODES = {2009, 2013, 2014, 2015, 2016}
-_PUBLIC_ORS_BASE_URLS = frozenset({
-    "https://api.heigit.org/openrouteservice",
-    # Kept for existing deployments until ORS shuts the legacy host down.
-    "https://api.openrouteservice.org",
-})
 _FAILED_PAIR_PATTERN = re.compile(
     r"between\s+points?\s+(\d+).*?\band\s+(\d+)",
     flags=re.IGNORECASE,
@@ -105,13 +107,14 @@ def _directions_cache_key(
     start_direction_deg: float | None = None,
     guide_budget: int = _MAX_GUIDE_COORDINATES,
     workflow_scope: str | None = None,
+    endpoint: str | None = None,
 ) -> tuple:
     cfg = get_settings().routing
     return (
         tuple((lat, lon) for lat, lon in prepared),
         profile,
         bool(closed),
-        cfg.ors_base_url.rstrip("/"),
+        (endpoint or cfg.ors_base_url).rstrip("/"),
         cfg.preference,
         bool(cfg.continue_straight),
         int(start_radius),
@@ -159,6 +162,7 @@ def _directions_cache_put(
 
 _PROFILE_MAP = {
     "run": "foot-walking",
+    "walk": "foot-walking",
     "run-walk": "foot-walking",
     "bike": "cycling-regular",
     "bike-road": "cycling-road",
@@ -190,29 +194,9 @@ _MAX_CONCERN_SEGMENTS = 6
 _MAX_CONCERN_POINTS = 36
 
 
-@dataclass(frozen=True)
-class _ORSFailure:
-    """Structured ORS failure used to choose the next bounded retry."""
-
-    status_code: int | None
-    error_code: int | None
-    message: str
-    read_timeout: bool = False
-
-
-@dataclass(frozen=True)
-class _ORSRouteResult:
-    """Successful ORS response with its route-readiness evidence."""
-
-    polyline: list[LatLon]
-    distance_m: float
-    readiness: RouteReadiness
-
-    def __iter__(self):
-        """Keep existing internal callers that unpack route and distance working."""
-
-        yield self.polyline
-        yield self.distance_m
+# Historic names: the shared retry loop and its tests predate other providers.
+_ORSFailure = RouteFailure
+_ORSRouteResult = RoutedPath
 
 
 @dataclass(frozen=True)
@@ -236,8 +220,7 @@ def profile_for(sport: str) -> str:
     return _PROFILE_MAP.get(sport, "foot-walking")
 
 
-def _is_public_ors(base_url: str) -> bool:
-    return base_url.rstrip("/").casefold() in _PUBLIC_ORS_BASE_URLS
+_is_public_ors = is_public_ors
 
 
 def _snap_request(
@@ -303,8 +286,9 @@ def preflight_route_candidates(
     if not candidate_routes:
         return []
     cfg = get_settings().routing
-    public_service = _is_public_ors(cfg.ors_base_url)
-    if not cfg.ors_api_key and public_service:
+    # Batch snap is ORS-only; keyless OSRM would need one request per point,
+    # which public servers' fair-use limits do not allow.
+    if select_routing_backend(cfg) != "ors":
         return None
 
     guide_budget = min(
@@ -1139,7 +1123,7 @@ def _ors_request(
     options: dict[str, object] = {}
     if avoid_features:
         options["avoid_features"] = avoid_features
-    if sport.startswith("run") and (preferences.prefer_quiet or preferences.prefer_green):
+    if not sport.startswith("bike") and (preferences.prefer_quiet or preferences.prefer_green):
         weightings: dict[str, float] = {}
         if preferences.prefer_quiet:
             weightings["quiet"] = 1.0
@@ -1282,6 +1266,77 @@ def _reduce_waypoints(waypoints: list[LatLon], *, closed: bool) -> list[LatLon] 
     return _subsample(waypoints, closed=closed, max_points=next_budget)
 
 
+@dataclass(frozen=True)
+class _OrsDirections:
+    """:class:`~.routing_backend.DirectionsBackend` for hosted or self-hosted ORS."""
+
+    base_url: str
+    api_key: str
+    preference: str
+    continue_straight: bool
+    sport: str = "run"
+    route_preferences: RoutePreferences | None = None
+    start_direction_deg: float | None = None
+    name: str = "ors"
+
+    @property
+    def endpoint(self) -> str:
+        return self.base_url
+
+    def route(
+        self,
+        via: list[LatLon],
+        *,
+        radius: int,
+        client: httpx.Client,
+    ) -> _ORSRouteResult | _ORSFailure:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = self.api_key
+        return _ors_request(
+            f"{self.base_url.rstrip('/')}/v2/directions/{profile_for(self.sport)}/geojson",
+            headers,
+            [[lon, lat] for lat, lon in via],
+            preference=self.preference,
+            continue_straight=self.continue_straight,
+            radius=radius,
+            sport=self.sport,
+            route_preferences=self.route_preferences,
+            start_direction_deg=self.start_direction_deg,
+            client=client,
+        )
+
+
+def _directions_backend(
+    cfg,
+    *,
+    sport: str,
+    route_preferences: RoutePreferences | None,
+    start_direction_deg: float | None,
+) -> DirectionsBackend | None:
+    """Build the configured directions provider, or ``None`` when none is usable."""
+
+    selected = select_routing_backend(cfg)
+    if selected == "ors":
+        return _OrsDirections(
+            base_url=cfg.ors_base_url,
+            api_key=cfg.ors_api_key,
+            preference=cfg.preference,
+            continue_straight=cfg.continue_straight,
+            sport=sport,
+            route_preferences=route_preferences,
+            start_direction_deg=start_direction_deg,
+        )
+    if selected == "osrm":
+        return osrm_client.OsrmDirections(
+            base_url=cfg.osrm_base_url,
+            sport=sport,
+            start_direction_deg=start_direction_deg,
+            min_interval_s=cfg.osrm_min_interval_s,
+        )
+    return None
+
+
 def snap_route_detailed(
     waypoints: list[LatLon], *, sport: str = "run", closed: bool = False,
     route_preferences: RoutePreferences | None = None,
@@ -1312,17 +1367,22 @@ def snap_route_detailed(
         route, distance, snapped = _straight_line_connector(prepared, closed=closed)
         return route, distance, snapped, RouteReadiness()
 
-    public_service = _is_public_ors(cfg.ors_base_url)
-    if not cfg.ors_api_key and public_service:
+    backend = _directions_backend(
+        cfg,
+        sport=sport,
+        route_preferences=route_preferences,
+        start_direction_deg=start_direction_deg,
+    )
+    if backend is None:
         route, distance, snapped = _straight_line_connector(prepared, closed=closed)
         return route, distance, snapped, RouteReadiness()
 
-    profile = profile_for(sport)
     start = max(1, int(cfg.snap_radius_m))
     runtime = active_workflow_runtime()
     cache_key = _directions_cache_key(
         prepared,
-        profile=profile,
+        profile=f"{backend.name}:{sport}",
+        endpoint=backend.endpoint,
         closed=closed,
         start_radius=start,
         route_preferences=route_preferences,
@@ -1337,7 +1397,8 @@ def snap_route_detailed(
     if cached is not None:
         polyline, distance, snapped, readiness = cached
         log.info(
-            "ORS directions served from memo cache (%d pts, %.0f m)",
+            "%s directions served from memo cache (%d pts, %.0f m)",
+            backend.name.upper(),
             len(polyline),
             distance,
         )
@@ -1352,11 +1413,6 @@ def snap_route_detailed(
         closed=closed,
         max_points=budget,
     )
-    url = f"{cfg.ors_base_url.rstrip('/')}/v2/directions/{profile}/geojson"
-    headers = {"Content-Type": "application/json"}
-    if cfg.ors_api_key:
-        headers["Authorization"] = cfg.ors_api_key
-
     radii = [start] + [radius for radius in _RADIUS_RETRIES if radius > start]
 
     attempts = 0
@@ -1369,19 +1425,7 @@ def snap_route_detailed(
                 break
             radius = radii[min(radius_index, len(radii) - 1)]
             attempts += 1
-            coords = [[lon, lat] for lat, lon in current_via]
-            result = _ors_request(
-                url,
-                headers,
-                coords,
-                preference=cfg.preference,
-                continue_straight=cfg.continue_straight,
-                radius=radius,
-                sport=sport,
-                route_preferences=route_preferences,
-                start_direction_deg=start_direction_deg,
-                client=client,
-            )
+            result = backend.route(current_via, radius=radius, client=client)
             if isinstance(result, _ORSRouteResult | tuple):
                 if isinstance(result, _ORSRouteResult):
                     polyline = result.polyline
@@ -1394,7 +1438,8 @@ def snap_route_detailed(
                 fidelity = shape_similarity.fidelity_between_routes(prepared, polyline, n=96)
                 log_method = log.info if fidelity >= _ACCEPTABLE_FIDELITY else log.warning
                 log_method(
-                    "ORS succeeded (attempt=%d, radius=%dm, via=%d, fidelity=%.3f%s)",
+                    "%s succeeded (attempt=%d, radius=%dm, via=%d, fidelity=%.3f%s)",
+                    backend.name.upper(),
                     attempts,
                     radius,
                     len(current_via),
@@ -1456,7 +1501,7 @@ def snap_route_detailed(
             current_via = reduced
             radius_index = 0
 
-    log.warning("ORS routing failed; using straight-line fallback")
+    log.warning("%s routing failed; using straight-line fallback", backend.name.upper())
     route, distance, snapped = _straight_line_connector(prepared, closed=closed)
     return route, distance, snapped, RouteReadiness()
 
