@@ -3219,7 +3219,7 @@ input:focus {
 
 .activity-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.35rem;
 }
 
@@ -5825,6 +5825,92 @@ input,
 .image-reference-form > .field-help,
 .image-reference-form > .field-error {
   margin: 0;
+}
+
+.svg-upload {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.8rem;
+}
+
+.svg-upload > p {
+  margin: 0;
+}
+
+.svg-upload-drop {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.svg-upload-drop--active {
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+.svg-upload-drop label {
+  display: grid;
+  gap: 0.15rem;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+
+.svg-upload-drop small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.svg-upload-drop input {
+  max-width: 100%;
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.svg-upload-status:empty {
+  display: none;
+}
+
+.svg-upload-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.svg-upload-preview svg {
+  flex: none;
+  width: 5.5rem;
+  height: 5.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.svg-upload-preview path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.svg-upload-preview figcaption {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  font-size: 0.72rem;
+}
+
+.svg-upload-preview figcaption span {
+  color: var(--muted);
+}
+
+.svg-upload-preview .button {
+  justify-self: start;
 }
 
 .image-reference-fields {

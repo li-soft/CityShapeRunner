@@ -103,7 +103,7 @@ class MuralPlanRequest(BaseModel):
     participants: int | None = Field(default=None, ge=2, le=24)
     members: list[MuralMember] | None = Field(default=None, min_length=2, max_length=24)
     name: str = Field(default="Community GPS mural", min_length=1, max_length=100)
-    sport: str = Field(default="run", pattern="^(run|bike)$")
+    sport: str = Field(default="run", pattern="^(run|walk|bike)$")
     return_to_start: bool = False
     route_preferences: RoutePreferences = Field(default_factory=RoutePreferences)
 
@@ -464,7 +464,7 @@ class ArtRescueRequest(BaseModel):
     recordings: list[RecordedGPX] = Field(min_length=1, max_length=24)
     tolerance_m: float = Field(default=25.0, ge=5.0, le=100.0)
     name: str = Field(default="GPS art rescue", min_length=1, max_length=100)
-    sport: str = Field(default="run", pattern="^(run|bike)$")
+    sport: str = Field(default="run", pattern="^(run|walk|bike)$")
 
     @field_validator("planned_points")
     @classmethod
@@ -530,7 +530,7 @@ async def rescue_recordings(request: ArtRescueRequest, http_request: Request) ->
 
 class RecognitionRepairRequest(BaseModel):
     reference_points: list[list[float]] = Field(min_length=4, max_length=500)
-    sport: Literal["run", "bike"] = "run"
+    sport: Literal["run", "walk", "bike"] = "run"
     closed: bool = True
     name: str = Field(default="Refined GPS art", min_length=1, max_length=100)
     shape_name: str = Field(default="edited", min_length=1, max_length=80)

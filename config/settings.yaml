@@ -51,10 +51,12 @@ workflow:
   # Target distance bounds (km) per sport; the planner scales the shape to fit.
   distance_bounds:
     run:  [3, 60]
+    walk: [2, 40]
     bike: [10, 200]
   # Used when the prompt omits a target; avoid the former 31.5 km run midpoint.
   distance_defaults:
     run: 8
+    walk: 5
     bike: 20
 
 routing:

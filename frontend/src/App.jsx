@@ -21,6 +21,7 @@ import {
   rescueArtwork,
 } from "./api.js";
 import RouteSetupPanel from "./RouteSetupPanel.jsx";
+import SvgShapeUpload from "./SvgShapeUpload.jsx";
 import GroupWorkspace from "./GroupWorkspace.jsx";
 import WaitingSketchGame from "./WaitingSketchGame.jsx";
 import WaitingRunnerGame from "./WaitingRunnerGame.jsx";
@@ -581,10 +582,20 @@ function validateImageReferenceUrl(value) {
   }
 }
 
+const ACTIVITY_OPTIONS = [
+  ["run", "Running"],
+  ["walk", "Walking"],
+  ["bike", "Cycling"],
+];
+
+function activityLabel(sport) {
+  return (ACTIVITY_OPTIONS.find(([value]) => value === sport) ?? ACTIVITY_OPTIONS[0])[1];
+}
+
 function distanceLimits(sport) {
-  return sport === "bike"
-    ? { minimum: 10, maximum: 200, activity: "cycling" }
-    : { minimum: 3, maximum: 60, activity: "running" };
+  if (sport === "bike") return { minimum: 10, maximum: 200, activity: "cycling" };
+  if (sport === "walk") return { minimum: 2, maximum: 40, activity: "walking" };
+  return { minimum: 3, maximum: 60, activity: "running" };
 }
 
 function validateSuggestion({ city, sport, distance }) {
@@ -592,8 +603,8 @@ function validateSuggestion({ city, sport, distance }) {
   if (!SUGGEST_CITIES.includes(city)) {
     errors.city = "Choose a city from the list.";
   }
-  if (!["run", "bike"].includes(sport)) {
-    errors.sport = "Choose running or cycling.";
+  if (!ACTIVITY_OPTIONS.some(([value]) => value === sport)) {
+    errors.sport = "Choose running, walking or cycling.";
   }
 
   const { minimum, maximum, activity } = distanceLimits(sport);
@@ -1221,7 +1232,7 @@ function OccasionStrip({ disabled, onPick, city }) {
                     <small>
                       {pick.city}
                       {pick.partner_ready ? " · official" : ""}
-                      {pick.sport ? ` · ${pick.sport === "bike" ? "Cycling" : "Running"}` : ""}
+                      {pick.sport ? ` · ${activityLabel(pick.sport)}` : ""}
                       {Number.isFinite(pick.distance_km) ? ` · ${pick.distance_km} km` : ""}
                     </small>
                     <em>{normaliseLabel(pick.shape_prompt)}</em>
@@ -1256,7 +1267,7 @@ function OccasionStrip({ disabled, onPick, city }) {
                       : occasion.days_until === 1
                         ? "tomorrow"
                         : `in ${occasion.days_until} days`}
-                    {occasion.sport ? ` · ${occasion.sport === "bike" ? "Cycling" : "Running"}` : ""}
+                    {occasion.sport ? ` · ${activityLabel(occasion.sport)}` : ""}
                     {Number.isFinite(occasion.distance_km) ? ` · ${occasion.distance_km} km` : ""}
                   </small>
                   <em>{normaliseLabel(occasion.shape_prompt)}</em>
@@ -1354,7 +1365,7 @@ function ShapePlacementOverlay({ open, preview, onClose, onConfirm, busy }) {
           <aside className="shape-placement-controls" aria-label="Shape placement controls">
             <div className="shape-placement-selection">
               <strong>{preview.label}</strong>
-              <span>{preview.city} · {preview.sport === "bike" ? "Cycling" : "Running"} · {preview.distance_km} km</span>
+              <span>{preview.city} · {activityLabel(preview.sport)} · {preview.distance_km} km</span>
             </div>
             <label htmlFor="placement-size">
               Footprint size
@@ -3448,7 +3459,7 @@ function ResultPanel({ result, onDownload, onGalleryPublished, onEditRequest, fo
       : result.requested_shape ?? result.intent?.shape ?? result.shape?.name,
   );
   const city = result.intent?.city ? normaliseLabel(result.intent.city) : "your selected area";
-  const activity = result.intent?.sport === "bike" ? "Cycling" : "Running";
+  const activity = activityLabel(result.intent?.sport);
   const targetDistance =
     activeRoute.target_distance_km ?? result.intent?.distance_km ?? distanceDetails.target_km;
   const planningOptions = result.planning_options ?? {};
@@ -4711,6 +4722,7 @@ export default function App() {
   const [imageSport, setImageSport] = useState("run");
   const [imageDistance, setImageDistance] = useState("10");
   const [imageErrors, setImageErrors] = useState({});
+  const [svgUpload, setSvgUpload] = useState(null);
   const [mapTemplates, setMapTemplates] = useState(MAP_PLACEMENT_FALLBACK_SHAPES);
   const [mapShape, setMapShape] = useState("heart");
   const [mapCity, setMapCity] = useState(SUGGEST_CITIES[0]);
@@ -4815,7 +4827,7 @@ export default function App() {
     if (!campaign || campaignApplied.current) return;
     // A campaign link pre-fills the drawing once; supporters can still edit it.
     campaignApplied.current = true;
-    const activityWord = suggestSport === "bike" ? "cycling" : "running";
+    const activityWord = distanceLimits(suggestSport).activity;
     setPrompt(`${campaign.shape} in ${suggestCity}, ${activityWord}, about ${suggestDistance} km`);
     setPromptError("");
   }, [campaign, suggestCity, suggestSport, suggestDistance]);
@@ -4986,7 +4998,7 @@ export default function App() {
 
   async function confirmMapPlacement(placement) {
     if (!mapPlacementPreview || loading || mapPlacementBusy) return;
-    const activityWord = mapSport === "bike" ? "cycling" : "running";
+    const activityWord = distanceLimits(mapSport).activity;
     const routePrompt = `${mapShape} in ${mapCity}, ${activityWord}, about ${mapDistance} km`;
     setPrompt(routePrompt);
     setPromptError("");
@@ -5030,7 +5042,9 @@ export default function App() {
     requestRef.current?.abort();
     requestRef.current = controller;
     lastGenerationRef.current = { prompt: cleanPrompt, payload: extraPayload };
-    setLoadingKind(extraPayload.reference_image_url ? "image" : "route");
+    setLoadingKind(
+      extraPayload.reference_image_url || extraPayload.reference_svg ? "image" : "route",
+    );
     setLoading(true);
     setGenerationProgress(null);
     setGenerationPreview(null);
@@ -5269,7 +5283,9 @@ export default function App() {
     event.preventDefault();
     if (loading) return;
 
-    const checkedUrl = validateImageReferenceUrl(imageUrl);
+    const checkedUrl = svgUpload
+      ? { value: "", error: "" }
+      : validateImageReferenceUrl(imageUrl);
     const { errors: selectionErrors, numericDistance } = validateSuggestion({
       city: imageCity,
       sport: imageSport,
@@ -5285,11 +5301,18 @@ export default function App() {
       return;
     }
 
-    const activity = imageSport === "bike" ? "cycling" : "running";
+    const { activity } = distanceLimits(imageSport);
     const imagePrompt = `a custom image in ${imageCity}, ${activity}, about ${numericDistance} km`;
-    setImageUrl(checkedUrl.value);
     setPrompt(imagePrompt);
     setPromptError("");
+    if (svgUpload) {
+      generate(imagePrompt, buildPlanningPayload({
+        reference_svg: svgUpload.svgText,
+        reference_svg_name: svgUpload.filename,
+      }));
+      return;
+    }
+    setImageUrl(checkedUrl.value);
     generate(imagePrompt, buildPlanningPayload({ reference_image_url: checkedUrl.value }));
   }
 
@@ -5589,10 +5612,10 @@ export default function App() {
                 disabled={loading}
                 city={suggestCity}
                 onPick={(pick) => {
-                  const pickedSport = ["run", "bike"].includes(pick.sport)
+                  const pickedSport = ACTIVITY_OPTIONS.some(([value]) => value === pick.sport)
                     ? pick.sport
                     : suggestSport;
-                  const activityWord = pickedSport === "bike" ? "cycling" : "running";
+                  const activityWord = distanceLimits(pickedSport).activity;
                   const distance =
                     Number.isFinite(pick.distance_km) ? String(pick.distance_km) : suggestDistance;
                   const pickedCity = pick.city || suggestCity;
@@ -5710,7 +5733,7 @@ export default function App() {
                     </div>
                     <div>
                       <dt>Activity</dt>
-                      <dd>{interpretation?.intent?.sport === "bike" ? "Cycling" : "Running"}</dd>
+                      <dd>{activityLabel(interpretation?.intent?.sport)}</dd>
                     </div>
                     <div>
                       <dt>Distance</dt>
@@ -5827,10 +5850,7 @@ export default function App() {
                   <fieldset className="field field--activity">
                     <legend>Activity</legend>
                     <div className="activity-options">
-                      {[
-                        ["run", "Running"],
-                        ["bike", "Cycling"],
-                      ].map(([value, label]) => (
+                      {ACTIVITY_OPTIONS.map(([value, label]) => (
                         <label className="activity-option" key={value}>
                           <input
                             type="radio"
@@ -5949,10 +5969,7 @@ export default function App() {
                   >
                     <legend>Activity</legend>
                     <div className="activity-options">
-                      {[
-                        ["run", "Running"],
-                        ["bike", "Cycling"],
-                      ].map(([value, label]) => (
+                      {ACTIVITY_OPTIONS.map(([value, label]) => (
                         <label className="activity-option" key={value}>
                           <input
                             ref={value === "run" ? suggestActivityRef : undefined}
@@ -6071,14 +6088,22 @@ export default function App() {
             <details className="image-reference-panel" id="planner-start-image" ref={imageStartRef}>
               <summary>
                 <span>
-                  <strong>Use an image link</strong>
-                  <small>Let AI turn any supported image into GPS art for your city.</small>
+                  <strong>Use your own SVG or an image link</strong>
+                  <small>Upload an SVG outline, or let AI turn any supported image into GPS art.</small>
                 </span>
                 <b aria-hidden="true">+</b>
               </summary>
               <form className="image-reference-form" onSubmit={handleImageImport} noValidate>
+                <SvgShapeUpload
+                  value={svgUpload}
+                  onChange={(upload) => {
+                    setSvgUpload(upload);
+                    if (upload) setImageErrors((current) => ({ ...current, url: "" }));
+                  }}
+                  disabled={loading}
+                />
                 <label className="image-url-field" htmlFor="image-reference-url">
-                  <span>Direct image URL</span>
+                  <span>{svgUpload ? "Direct image URL (not used while an SVG is uploaded)" : "Or a direct image URL"}</span>
                   <input
                     id="image-reference-url"
                     ref={imageUrlRef}
@@ -6097,8 +6122,8 @@ export default function App() {
                     aria-describedby="image-url-help"
                     aria-invalid={Boolean(imageErrors.url)}
                     aria-errormessage={imageErrors.url ? "image-url-error" : undefined}
-                    disabled={loading}
-                    required
+                    disabled={loading || Boolean(svgUpload)}
+                    required={!svgUpload}
                   />
                 </label>
                 <p id="image-url-help" className="field-help">
@@ -6139,8 +6164,9 @@ export default function App() {
                       onChange={(event) => setImageSport(event.target.value)}
                       disabled={loading}
                     >
-                      <option value="run">Running</option>
-                      <option value="bike">Cycling</option>
+                      {ACTIVITY_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="field">
@@ -6161,7 +6187,9 @@ export default function App() {
                     </div>
                   </div>
                   <button type="submit" className="button button--secondary" disabled={loading}>
-                    {loading ? "Generating from image…" : "Generate AI route"}
+                    {loading
+                      ? "Generating from image…"
+                      : svgUpload ? "Generate route from SVG" : "Generate AI route"}
                   </button>
                 </div>
                 {(imageErrors.city || imageErrors.sport || imageErrors.distance) && (

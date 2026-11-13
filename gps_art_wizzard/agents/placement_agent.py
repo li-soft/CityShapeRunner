@@ -13,6 +13,7 @@ _DEFAULT_TOLERANCE = 0.8  # metres; SnapAgent simplifies the road polyline to th
 
 _NETWORK_DISTANCE_FACTORS = {
     "run": 1.45,
+    "walk": 1.45,
     "bike": 1.30,
 }
 

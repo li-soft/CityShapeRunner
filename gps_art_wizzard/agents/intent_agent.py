@@ -98,9 +98,9 @@ _INTENT_JSON_SCHEMA = {
             "maxLength": 100,
         },
         "sport": {
-            "description": "Requested activity; running is the default.",
+            "description": "Requested activity (run, walk or bike); running is the default.",
             "type": "string",
-            "enum": ["run", "bike"],
+            "enum": ["run", "walk", "bike"],
         },
         "distance_km": {
             "description": "Positive target distance in kilometres; null when absent.",
@@ -179,7 +179,7 @@ class IntentAgent(BaseAgent):
             data = {}
         data = data if isinstance(data, dict) else {}
         sport = str(data.get("sport") or "run").lower()
-        if sport not in ("run", "bike"):
+        if sport not in ("run", "walk", "bike"):
             sport = "run"
         dist = data.get("distance_km")
         try:
@@ -221,7 +221,15 @@ class IntentAgent(BaseAgent):
             r"\b(?:run|running|jog|jogging|marathon|fut\w*|kocog\w*)\b",
             low,
         )
-        sport = "bike" if bike_request else ("run" if run_request else cfg.sport_default)
+        walk_request = re.search(r"\b(?:walk|walking|stroll|hike|hiking|s[eé]t[aá]\w*)\b", low)
+        if bike_request:
+            sport = "bike"
+        elif run_request:
+            sport = "run"
+        elif walk_request:
+            sport = "walk"
+        else:
+            sport = cfg.sport_default
         dist_match = re.search(r"(\d+(?:[.,]\d+)?)\s*km", low)
         dist = float(dist_match.group(1).replace(",", ".")) if dist_match else None
         city = next((c for c in _KNOWN_CITIES if c.lower() in low), None)

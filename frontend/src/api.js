@@ -354,6 +354,17 @@ export function fetchShapePlacementPreview(
   });
 }
 
+export function uploadSvgShape({ svgText, filename }, options = {}) {
+  const params = new URLSearchParams({ filename });
+  return request(`/shape-upload?${params}`, {
+    ...options,
+    timeoutMs: 15_000,
+    method: "POST",
+    headers: { "Content-Type": "image/svg+xml" },
+    body: svgText,
+  });
+}
+
 export function listGallery({ cursor = null, limit = 24, campaign = null, ...options } = {}) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set("cursor", cursor);

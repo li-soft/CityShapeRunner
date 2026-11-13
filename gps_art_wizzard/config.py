@@ -90,6 +90,20 @@ class RoutingConfig:
     preference: str = field(
         default_factory=lambda: os.getenv("ORS_PREFERENCE", "recommended")
     )
+    # auto: ORS when a key or self-hosted ORS is configured, else keyless OSRM.
+    backend: str = field(
+        default_factory=lambda: os.getenv("ROUTING_BACKEND", "auto").strip().lower()
+    )
+    # ``{profile}`` is replaced by the OSRM profile (foot or bike).
+    osrm_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "OSRM_BASE_URL", "https://routing.openstreetmap.de/routed-{profile}"
+        )
+    )
+    # Public OSRM servers allow roughly one request per second.
+    osrm_min_interval_s: float = field(
+        default_factory=lambda: _float("OSRM_MIN_INTERVAL_S", 1.0)
+    )
 
 
 @dataclass
@@ -160,10 +174,11 @@ class WorkflowConfig:
     )
     sport_default: str = field(default_factory=lambda: os.getenv("DEFAULT_SPORT", "run"))
     city_default: str = field(default_factory=lambda: os.getenv("DEFAULT_CITY", "Budapest"))
-    distance_bounds: dict[str, list[float]] = field(default_factory=lambda: {"run": [3, 60], "bike": [10, 200]})
+    distance_bounds: dict[str, list[float]] = field(default_factory=lambda: {"run": [3, 60], "walk": [2, 40], "bike": [10, 200]})
     distance_defaults: dict[str, float] = field(
         default_factory=lambda: {
             "run": _float("DEFAULT_RUN_DISTANCE_KM", 8.0),
+            "walk": _float("DEFAULT_WALK_DISTANCE_KM", 5.0),
             "bike": _float("DEFAULT_BIKE_DISTANCE_KM", 20.0),
         }
     )
@@ -229,6 +244,10 @@ def get_settings() -> Settings:
                     "run": _float(
                         "DEFAULT_RUN_DISTANCE_KM",
                         float(v.get("run", 8.0)),
+                    ),
+                    "walk": _float(
+                        "DEFAULT_WALK_DISTANCE_KM",
+                        float(v.get("walk", 5.0)),
                     ),
                     "bike": _float(
                         "DEFAULT_BIKE_DISTANCE_KM",

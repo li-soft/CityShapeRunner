@@ -85,6 +85,7 @@ def test_yaml_overlays_populate_workflow_and_routing(monkeypatch) -> None:
         "ORS_CONTINUE_STRAIGHT",
         "DEFAULT_RUN_DISTANCE_KM",
         "DEFAULT_BIKE_DISTANCE_KM",
+        "DEFAULT_WALK_DISTANCE_KM",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(
@@ -110,7 +111,7 @@ def test_yaml_overlays_populate_workflow_and_routing(monkeypatch) -> None:
     assert settings.workflow.max_refinement_iterations == 9
     assert settings.workflow.preflight_enabled is False
     assert settings.workflow.distance_bounds == {"run": [5, 25], "bike": [15, 120]}
-    assert settings.workflow.distance_defaults == {"run": 7.5, "bike": 24.0}
+    assert settings.workflow.distance_defaults == {"run": 7.5, "walk": 5.0, "bike": 24.0}
     assert settings.routing.snap_radius_m == 250
     assert settings.routing.continue_straight is True
     assert settings.routing.preference == "shortest"
@@ -122,6 +123,7 @@ def test_environment_values_override_yaml_overlays(monkeypatch) -> None:
     monkeypatch.setenv("ORS_SNAP_RADIUS_M", "90")
     monkeypatch.setenv("ORS_CONTINUE_STRAIGHT", "false")
     monkeypatch.setenv("DEFAULT_RUN_DISTANCE_KM", "6.5")
+    monkeypatch.setenv("DEFAULT_WALK_DISTANCE_KM", "4")
     monkeypatch.setattr(
         config,
         "_load_yaml_overlays",
@@ -139,7 +141,7 @@ def test_environment_values_override_yaml_overlays(monkeypatch) -> None:
 
     assert settings.workflow.max_refinement_iterations == 4
     assert settings.workflow.preflight_enabled is False
-    assert settings.workflow.distance_defaults == {"run": 6.5, "bike": 22.0}
+    assert settings.workflow.distance_defaults == {"run": 6.5, "walk": 4.0, "bike": 22.0}
     assert settings.routing.snap_radius_m == 90
     assert settings.routing.continue_straight is False
 

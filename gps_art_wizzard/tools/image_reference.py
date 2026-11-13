@@ -1,4 +1,4 @@
-"""Safely import a public SVG or raster image as a GPS-art reference."""
+"""Safely import a public or uploaded SVG/raster image as a GPS-art reference."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ REFERENCE_IMAGE_MAX_DIMENSION = 1_024
 
 
 class ImageReferenceError(ValueError):
-    """A public image link could not be safely converted into route geometry."""
+    """An image link or upload could not be safely converted into route geometry."""
 
 
 @dataclass(frozen=True)
@@ -87,23 +87,43 @@ def _import_public_image(url: str, client: httpx.Client) -> ImportedImageReferen
     media_type = _detect_media_type(content)
     name = _reference_name(final_url)
     if media_type == "image/svg+xml":
-        shape = _shape_from_svg(content, name=name)
-        return ImportedImageReference(
-            name=name,
-            kind="svg",
-            shape=shape,
-            image_data_url=shape_program.render_paths_png_data_url(
-                shape.paths,
-                size=512,
-                padding=28,
-            ),
-        )
+        return _svg_reference(shape_from_svg_bytes(content, name=name))
     image_data_url, fallback_shape = _normalise_raster_image(content, name=name)
     return ImportedImageReference(
         name=name,
         kind="raster",
         shape=fallback_shape,
         image_data_url=image_data_url,
+    )
+
+
+def uploaded_svg_shape(content: bytes, *, filename: str | None = None) -> Shape:
+    """Parse an SVG file uploaded by the user (path, polygon, polyline, shapes)."""
+
+    if not content.strip():
+        raise ImageReferenceError("The uploaded SVG file is empty.")
+    if _detect_media_type(content) != "image/svg+xml":
+        raise ImageReferenceError("Upload an SVG file (an <svg> document).")
+    return shape_from_svg_bytes(content, name=clean_reference_name(filename or ""))
+
+
+def import_uploaded_svg(content: bytes, *, filename: str | None = None) -> ImportedImageReference:
+    """Import an uploaded SVG file as a generation reference."""
+
+    return _svg_reference(uploaded_svg_shape(content, filename=filename))
+
+
+def _svg_reference(shape: Shape) -> ImportedImageReference:
+    name = shape.name
+    return ImportedImageReference(
+        name=name,
+        kind="svg",
+        shape=shape,
+        image_data_url=shape_program.render_paths_png_data_url(
+            shape.paths,
+            size=512,
+            padding=28,
+        ),
     )
 
 
@@ -344,7 +364,12 @@ def _shape_from_raster(image: Image.Image, *, name: str) -> Shape | None:
     )
 
 
-def _shape_from_svg(content: bytes, *, name: str) -> Shape:
+def shape_from_svg_bytes(content: bytes, *, name: str) -> Shape:
+    """Sample every visible SVG outline into unit-space paths (y pointing up).
+
+    Keeps the ``MAX_SVG_PATHS`` longest subpaths; the shape agent normalises
+    position and scale later, exactly as for library templates.
+    """
     if len(content) > MAX_SVG_BYTES:
         raise ImageReferenceError("SVG files must be 2 MB or smaller.")
     lowered = content.lower()
@@ -353,7 +378,7 @@ def _shape_from_svg(content: bytes, *, name: str) -> Shape:
     try:
         document = SVG.parse(BytesIO(content), reify=True, width=1_000, height=1_000)
     except Exception as exc:  # noqa: BLE001 - normalised to a safe public error
-        raise ImageReferenceError("The linked SVG could not be parsed.") from exc
+        raise ImageReferenceError("The SVG could not be parsed.") from exc
 
     candidates: list[tuple[float, list[tuple[float, float]], bool]] = []
     segment_count = 0
@@ -370,7 +395,7 @@ def _shape_from_svg(content: bytes, *, name: str) -> Shape:
             path.reify()
             segment_count += len(path)
             if segment_count > MAX_SVG_SEGMENTS:
-                raise ImageReferenceError("The linked SVG is too complex to turn into a route.")
+                raise ImageReferenceError("The SVG is too complex to turn into a route.")
             for subpath in path.as_subpaths():
                 sampled_path = SvgPath(subpath)
                 if len(sampled_path) < 2:
@@ -396,11 +421,11 @@ def _shape_from_svg(content: bytes, *, name: str) -> Shape:
     except ImageReferenceError:
         raise
     except Exception as exc:  # noqa: BLE001 - third-party parser error
-        raise ImageReferenceError("The linked SVG contains unsupported geometry.") from exc
+        raise ImageReferenceError("The SVG contains unsupported geometry.") from exc
 
     selected = sorted(candidates, key=lambda item: item[0], reverse=True)[:MAX_SVG_PATHS]
     if not selected:
-        raise ImageReferenceError("The linked SVG contains no usable vector outline.")
+        raise ImageReferenceError("The SVG contains no usable vector outline.")
     return Shape(
         name=name,
         paths=[points for _, points, _ in selected],
@@ -410,7 +435,13 @@ def _shape_from_svg(content: bytes, *, name: str) -> Shape:
 
 
 def _reference_name(url: str) -> str:
-    filename = unquote(PurePosixPath(urlsplit(url).path).name)
+    return clean_reference_name(unquote(PurePosixPath(urlsplit(url).path).name))
+
+
+def clean_reference_name(filename: str) -> str:
+    """Turn a file name into a short human-readable shape name."""
+
+    filename = PurePosixPath(filename.replace("\\", "/")).name
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     cleaned = re.sub(r"[^\w -]+", " ", stem, flags=re.UNICODE)
     cleaned = cleaned.replace("-", " ").replace("_", " ")

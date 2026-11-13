@@ -8,7 +8,7 @@ export const API_PROXY_PATHS = [
   "/gallery", "/timed-readiness", "/mural-plan", "/recognition-repair",
   "/inkproof-analysis", "/night-readiness", "/route-landmarks", "/occasions",
   "/art-rescue", "/accessibility-readiness", "/lesson-pack", "/destinations",
-  "/shape-templates", "/shape-placement-preview", "/walkthrough-diagnostics",
+  "/shape-templates", "/shape-placement-preview", "/shape-upload", "/walkthrough-diagnostics",
 ];
 
 export default defineConfig({

@@ -584,7 +584,7 @@ test("a supported image link can generate an AI route in a selected city", async
 
   await openOtherWays(page);
   const imagePanel = page.locator(".image-reference-panel");
-  await imagePanel.getByText("Use an image link").click();
+  await imagePanel.getByText("Use your own SVG or an image link").click();
   await imagePanel.getByLabel("Direct image URL").fill(
     "https://www.premiumsvg.com/wimg1/mug-icon.webp",
   );
@@ -601,6 +601,74 @@ test("a supported image link can generate an AI route in a selected city", async
     page,
     "a custom image in Pécs, cycling, about 24 km",
   );
+});
+
+test("an uploaded SVG is previewed and generates a walking route from its outline", async ({ page }) => {
+  const capture = await mockGeneration(page);
+  const uploads = [];
+  await page.route("**/shape-upload?**", async (route) => {
+    uploads.push({ url: route.request().url(), body: route.request().postData() });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        shape: "heart",
+        label: "Heart",
+        closed: true,
+        paths: [[[0, -0.5], [-0.5, 0.2], [0, 0.5], [0.5, 0.2], [0, -0.5]]],
+        path_count: 1,
+        point_count: 5,
+      }),
+    });
+  });
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M5 9 L1 3 L5 1 L9 3 Z"/></svg>';
+  await page.goto("/");
+
+  await openOtherWays(page);
+  const imagePanel = page.locator(".image-reference-panel");
+  await imagePanel.getByText("Use your own SVG or an image link").click();
+  await imagePanel.getByLabel("Upload your own SVG shape").setInputFiles({
+    name: "heart.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(svg),
+  });
+
+  await expect(imagePanel.getByRole("img", { name: "Outline of Heart" })).toBeVisible();
+  expect(uploads).toHaveLength(1);
+  expect(new URL(uploads[0].url).searchParams.get("filename")).toBe("heart.svg");
+  expect(uploads[0].body).toBe(svg);
+  await expect(imagePanel.getByLabel(/Direct image URL/)).toBeDisabled();
+
+  await imagePanel.getByLabel("Destination").selectOption("Pécs");
+  await imagePanel.getByLabel("Travel mode").selectOption("walk");
+  await imagePanel.getByLabel("Length").fill("6");
+  await imagePanel.getByRole("button", { name: "Generate route from SVG" }).click();
+
+  await expect.poll(() => capture.lastPayload()).toEqual({
+    prompt: "a custom image in Pécs, walking, about 6 km",
+    reference_svg: svg,
+    reference_svg_name: "heart.svg",
+  });
+});
+
+test("a non-SVG upload is rejected before contacting the planner", async ({ page }) => {
+  let uploads = 0;
+  await page.route("**/shape-upload?**", async (route) => {
+    uploads += 1;
+    await route.abort();
+  });
+  await page.goto("/");
+
+  await openOtherWays(page);
+  const imagePanel = page.locator(".image-reference-panel");
+  await imagePanel.getByText("Use your own SVG or an image link").click();
+  await imagePanel.getByLabel("Upload your own SVG shape").setInputFiles({
+    name: "photo.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("not really a png"),
+  });
+
+  await expect(imagePanel.getByRole("alert")).toContainText("Choose an .svg file");
+  expect(uploads).toBe(0);
 });
 
 test("mouse submission of an empty idea shows a persistent focused error", async ({ page }) => {

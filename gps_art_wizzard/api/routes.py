@@ -59,7 +59,7 @@ class IntentOverrideRequest(BaseModel):
     shape: str | None = Field(default=None, max_length=80)
     text: str | None = Field(default=None, max_length=20)
     city: str | None = Field(default=None, max_length=100)
-    sport: Literal["run", "bike"] = "run"
+    sport: Literal["run", "walk", "bike"] = "run"
     distance_km: float | None = Field(default=None, gt=0, le=500)
     style: str | None = Field(default=None, max_length=80)
     suggest: bool = False
@@ -113,6 +113,12 @@ class GenerateRequest(BaseModel):
         default_factory=RoutePreferencesRequest
     )
     reference_image_url: str | None = Field(default=None, max_length=2_048)
+    reference_svg: str | None = Field(
+        default=None,
+        max_length=image_reference.MAX_SVG_BYTES,
+        description="Raw text of an uploaded SVG drawing to route instead of a template.",
+    )
+    reference_svg_name: str | None = Field(default=None, max_length=180)
     map_placement: MapPlacementRequest | None = None
 
     @field_validator("prompt", mode="before")
@@ -158,6 +164,21 @@ class GenerateRequest(BaseModel):
         if not cleaned.casefold().startswith(("http://", "https://")):
             raise ValueError("enter a public HTTP or HTTPS image URL")
         return cleaned
+
+    @field_validator("reference_svg")
+    @classmethod
+    def require_svg_content(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("the uploaded SVG file is empty")
+        return value
+
+    @model_validator(mode="after")
+    def one_reference_source(self) -> GenerateRequest:
+        if self.reference_svg is not None and self.reference_image_url is not None:
+            raise ValueError("choose either an uploaded SVG or an image link, not both")
+        if self.reference_svg_name is not None and self.reference_svg is None:
+            raise ValueError("an SVG file name needs the uploaded SVG content")
+        return self
 
     @model_validator(mode="after")
     def one_start_source(self) -> GenerateRequest:
@@ -265,7 +286,7 @@ class InterpretResponse(BaseModel):
 class EditedRouteRequest(BaseModel):
     control_points: list[list[float]] = Field(..., min_length=2, max_length=200)
     reference_points: list[list[float]] = Field(default_factory=list, max_length=500)
-    sport: Literal["run", "bike"] = "run"
+    sport: Literal["run", "walk", "bike"] = "run"
     closed: bool = False
     target_distance_km: float | None = Field(default=None, gt=0, le=500)
     name: str = Field(default="Edited GPS art route", min_length=1, max_length=120)
@@ -973,11 +994,81 @@ def shape_templates() -> dict:
     return {"count": len(shapes), "shapes": shapes}
 
 
+def _preview_paths(normalised_paths: list) -> list[list[list[float]]]:
+    """Evenly sample normalised unit-space paths for a lightweight UI preview."""
+
+    points_per_path = max(16, 280 // max(1, len(normalised_paths)))
+    return [
+        [[float(x), float(y)] for x, y in _even_sample(path, points_per_path)]
+        for path in normalised_paths
+        if len(path) >= 2
+    ]
+
+
+SVG_UPLOAD_MEDIA_TYPES = frozenset({
+    "image/svg+xml",
+    "application/xml",
+    "text/xml",
+    "text/plain",
+    "application/octet-stream",
+})
+
+
+async def _read_bounded_body(request: Request, limit: int) -> bytes:
+    """Read the raw request body, failing fast once it exceeds ``limit`` bytes."""
+
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=413, detail="SVG files must be 2 MB or smaller.")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise HTTPException(status_code=413, detail="SVG files must be 2 MB or smaller.")
+    return bytes(body)
+
+
+@router.post("/shape-upload")
+async def upload_svg_shape(
+    request: Request,
+    filename: str | None = Query(default=None, max_length=180),
+) -> dict:
+    """Validate an uploaded SVG and return its normalised outline for preview.
+
+    Send the file as the raw request body (``Content-Type: image/svg+xml``).
+    Generation is stateless: the client sends the same SVG text again as
+    ``reference_svg`` in ``/generate``.
+    """
+
+    media_type = request.headers.get("content-type", "").split(";")[0].strip().casefold()
+    if media_type and media_type not in SVG_UPLOAD_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail="Send the SVG file as the raw request body with Content-Type image/svg+xml.",
+        )
+    content = await _read_bounded_body(request, image_reference.MAX_SVG_BYTES)
+    try:
+        shape = await asyncio.to_thread(
+            image_reference.uploaded_svg_shape, content, filename=filename
+        )
+    except image_reference.ImageReferenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    normalised_paths = geo.normalize_shape(shape.paths)
+    return {
+        "shape": shape.name,
+        "label": shape.name.title(),
+        "closed": shape.closed,
+        "paths": _preview_paths(normalised_paths),
+        "path_count": len(shape.paths),
+        "point_count": sum(len(path) for path in shape.paths),
+    }
+
+
 @router.get("/shape-placement-preview")
 def shape_placement_preview(
     shape: str = Query(min_length=1, max_length=80),
     city: str = Query(min_length=1, max_length=100),
-    sport: Literal["run", "bike"] = "run",
+    sport: Literal["run", "walk", "bike"] = "run",
     distance_km: float = Query(default=10.0, ge=2.0, le=300.0),
 ) -> dict:
     """Return a normalised outline and a map-ready initial footprint."""
@@ -994,17 +1085,11 @@ def shape_placement_preview(
         name,
         distance_km,
     )
-    points_per_path = max(16, 280 // max(1, len(normalised_paths)))
-    preview_paths = [
-        [[float(x), float(y)] for x, y in _even_sample(path, points_per_path)]
-        for path in normalised_paths
-        if len(path) >= 2
-    ]
     return {
         "shape": name,
         "label": name.replace("_", " ").title(),
         "closed": closed,
-        "paths": preview_paths,
+        "paths": _preview_paths(normalised_paths),
         "city": resolved.name,
         "city_substituted": resolved.substituted,
         "center": [resolved.lat, resolved.lon],
@@ -1165,6 +1250,22 @@ def record_route_acceptance(req: RouteAcceptanceRequest) -> dict:
     return {"recorded": True}
 
 
+def _import_reference(req: GenerateRequest) -> image_reference.ImportedImageReference | None:
+    """Turn an uploaded SVG or a public image link into a reference shape."""
+
+    try:
+        if req.reference_svg is not None:
+            return image_reference.import_uploaded_svg(
+                req.reference_svg.encode("utf-8"),
+                filename=req.reference_svg_name,
+            )
+        if req.reference_image_url:
+            return image_reference.import_image_reference(req.reference_image_url)
+    except image_reference.ImageReferenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return None
+
+
 @router.post("/generate", response_model=GenerateResponse)
 def generate_route(req: GenerateRequest, request: Request) -> dict | StreamingResponse:
     if "application/x-ndjson" in request.headers.get("accept", ""):
@@ -1252,14 +1353,7 @@ def _generate_route_sync(
         if req.map_placement is not None
         else None
     )
-    imported_reference = None
-    if req.reference_image_url:
-        try:
-            imported_reference = image_reference.import_image_reference(
-                req.reference_image_url
-            )
-        except image_reference.ImageReferenceError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    imported_reference = _import_reference(req)
     start_point = None
     start_label = None
     if req.start_point is not None:

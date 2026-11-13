@@ -10,7 +10,7 @@ refinement heuristics.
 Hard rules:
 - JSON only. No markdown fences, no commentary, no apologies.
 - Never invent data. If the user did not specify something, emit null or omit it.
-- Distances are in kilometres. Sports are "run" or "bike".
+- Distances are in kilometres. Sports are "run", "walk" or "bike".
 - Coordinates are [lat, lon] in decimal degrees, or [x, y] in unit space — the prompt
   will say which. Never mix them.
 - If a request is ambiguous, pick the most reasonable default and proceed. The pipeline
