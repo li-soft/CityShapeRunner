@@ -19,6 +19,90 @@ route is. Only a route returned by the connected street router can reach the
 download flow; a road-routed result that misses a quality target requires
 explicit review.
 
+## This fork: SVG upload, walking and keyless routing
+
+> **Licence note:** the upstream repository
+> ([ak91hu/CityShapeRunner](https://github.com/ak91hu/CityShapeRunner)) publishes
+> no licence file, so its code is not openly licensed even though
+> `pyproject.toml` says `MIT`. Check with the upstream author before you
+> redistribute or deploy this fork.
+
+This fork adds three things to the planner:
+
+- **Upload your own SVG shape.** Open *Other ways to start → Use your own SVG
+  or an image link*, then drop an `.svg` file or choose one. The server checks
+  the file and shows a preview. Then pick a city, an activity and a length, and
+  generate the route. Paths, polygons, polylines, basic shapes and multi-part
+  paths are supported, up to 2 MB. One closed outline (a heart, a country
+  border) gives the best result, because separate strokes are joined with
+  connecting legs. The uploaded outline goes through the same normalisation,
+  placement search, street routing, quality gates and GPX/TCX export as a
+  built-in template. Your start point (current location or an address) still
+  applies.
+- **Walking** as a third activity next to running and cycling (2–40 km,
+  default 5 km). It routes on the pedestrian profile (`foot-walking` on ORS,
+  `foot` on OSRM).
+- **Keyless street routing.** With no `ORS_API_KEY` and no self-hosted ORS,
+  the planner routes through the public FOSSGIS OSRM server
+  (`routing.openstreetmap.de`, separate foot and bike graphs). OpenRouteService
+  is still used whenever `ORS_API_KEY` is set or `ORS_BASE_URL` points at your
+  own ORS instance.
+
+### Run it locally (Windows PowerShell)
+
+You need Python 3.12 or newer and Node.js 22 or newer.
+
+```powershell
+# Backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env      # leave ORS_API_KEY empty for keyless mode
+paceasso                         # API on http://127.0.0.1:8000 (/docs, /health)
+
+# Frontend (second terminal)
+cd frontend
+npm ci --no-audit --no-fund
+npm run dev                      # UI on http://127.0.0.1:5173
+```
+
+Smoke-check the API without the UI:
+
+```powershell
+# Preview an uploaded SVG (raw body, not multipart)
+curl.exe -X POST "http://127.0.0.1:8000/shape-upload?filename=heart.svg" `
+  -H "Content-Type: image/svg+xml" --data-binary "@heart.svg"
+
+# Generate a walking route from the same SVG (the JSON field holds the SVG text)
+python -c "import json,pathlib as p; p.Path('body.json').write_text(json.dumps({'prompt': 'a custom image in Budapest, walking, about 5 km', 'reference_svg': p.Path('heart.svg').read_text(), 'reference_svg_name': 'heart.svg'}))"
+curl.exe -X POST http://127.0.0.1:8000/generate -H "Content-Type: application/json" --data-binary "@body.json"
+```
+
+`/shape-upload` returns the normalised outline (`paths` in unit space, y up).
+It answers 413 for files over 2 MB, 415 for multipart or non-SVG content types,
+and 422 for empty, malformed or shape-less SVGs (also for SVGs with a DOCTYPE
+or entities). `/generate` accepts the same SVG text as `reference_svg`. You
+cannot send it together with `reference_image_url`.
+
+### Routing settings
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ROUTING_BACKEND` | `auto` | `auto` uses ORS when it is configured and OSRM otherwise. `ors` and `osrm` force one provider. |
+| `ORS_API_KEY` / `ORS_BASE_URL` | empty / HeiGIT | A key or a non-public ORS URL turns ORS on. |
+| `OSRM_BASE_URL` | `https://routing.openstreetmap.de/routed-{profile}` | Any OSRM server. `{profile}` becomes `foot` or `bike`. |
+| `OSRM_MIN_INTERVAL_S` | `1.0` | Minimum gap between OSRM requests across the process. |
+
+Fair use on public OSRM: requests are throttled to one per second, and
+identical requests inside one generation come from the existing directions
+cache. The batched ORS snap preflight is skipped, because it would take one
+OSRM request per point. A keyless generation therefore makes a few dozen
+Directions calls and can take a minute. OSRM returns no surface or steepness
+data, so route-readiness details show as unavailable. Use your own OSRM or ORS
+server for heavier use. Tests and `GEOCODE_OFFLINE=1` never contact public
+routers.
+
 The visual [engineering implementation guide](docs/architecture/implementation/index.md)
 documents the backend sequence, data classes, placement-search funnel, ORS
 retry state machine, quality formulas, React/Leaflet state flow, and production
